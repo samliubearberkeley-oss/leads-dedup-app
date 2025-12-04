@@ -16,7 +16,8 @@ import {
   Copy,
   Check,
   Search,
-  X
+  X,
+  Filter
 } from 'lucide-react';
 import type { Lead, ProcessResult, Stats } from './types';
 import { 
@@ -286,6 +287,56 @@ function App() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // 对新leads列表进行去重
+  const handleDeduplicateNewLeads = () => {
+    if (newLeads.length === 0) {
+      setMessage({ type: 'error', text: '没有数据需要去重' });
+      return;
+    }
+
+    // 规范化URL函数
+    const normalizeUrl = (url: string) => {
+      if (!url) return '';
+      return url.trim().toLowerCase().replace(/\/+$/, '');
+    };
+
+    const seenUrls = new Set<string>();
+    const uniqueLeads: Lead[] = [];
+    let removedCount = 0;
+
+    newLeads.forEach(lead => {
+      if (!lead.url || !lead.url.trim()) {
+        // 没有URL的记录也保留（但只保留第一个）
+        if (!seenUrls.has('__no_url__')) {
+          seenUrls.add('__no_url__');
+          uniqueLeads.push(lead);
+        } else {
+          removedCount++;
+        }
+        return;
+      }
+
+      const normalizedUrl = normalizeUrl(lead.url);
+      if (!seenUrls.has(normalizedUrl)) {
+        seenUrls.add(normalizedUrl);
+        uniqueLeads.push(lead);
+      } else {
+        removedCount++;
+      }
+    });
+
+    if (removedCount === 0) {
+      setMessage({ type: 'info', text: '✅ 列表已经是唯一的，没有重复项' });
+      return;
+    }
+
+    setNewLeads(uniqueLeads);
+    setMessage({
+      type: 'success',
+      text: `✅ 去重完成！移除了 ${removedCount} 个重复项，保留 ${uniqueLeads.length} 个唯一leads`
+    });
   };
 
   // 删除单个lead
@@ -756,6 +807,15 @@ function App() {
                   新Leads（{newLeads.length}）
                 </h2>
                 <div className="flex gap-2">
+                  <button
+                    onClick={handleDeduplicateNewLeads}
+                    disabled={newLeads.length === 0}
+                    className="btn-secondary flex items-center gap-2 text-sm !py-2 !px-4 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="去除新leads列表中的重复项（基于URL）"
+                  >
+                    <Filter size={16} />
+                    去重
+                  </button>
                   <button
                     onClick={handleExportNewLeads}
                     disabled={newLeads.length === 0}
