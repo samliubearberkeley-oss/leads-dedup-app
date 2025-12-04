@@ -63,6 +63,9 @@ function App() {
 
   // 解析CSV数据
   const parseCSVData = (csvText: string): Lead[] => {
+    console.log('parseCSVData 被调用，CSV文本长度:', csvText.length);
+    console.log('CSV文本前200字符:', csvText.substring(0, 200));
+    
     const result = Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
@@ -90,27 +93,41 @@ function App() {
       }
     });
 
-    return result.data
-      .filter((row: any) => row.url && row.url.trim())
-      .map((row: any) => ({
-        url: row.url?.trim() || '',
-        channel: row.channel?.trim() || '',
-        username: row.username?.trim() || '',
-        email: row.email?.trim() || '',
-        valid_email: row.valid_email?.trim() || '',
-        post_per_month: row.post_per_month?.trim() || '',
-        similarity: row.similarity?.trim() || '',
-        last_updated: row.last_updated?.trim() || '',
-        country: row.country?.trim() || '',
-        subscribers: row.subscribers?.trim() || '',
-        posts: row.posts?.trim() || '',
-        views: row.views?.trim() || '',
-        er: row.er?.trim() || '',
-        vr: row.vr?.trim() || '',
-        links: row.links?.trim() || '',
-        topics: row.topics?.trim() || '',
-        audiences: row.audiences?.trim() || '',
-      }));
+    console.log('Papa.parse 解析结果:', result);
+    console.log('解析后的数据行数:', result.data.length);
+    if (result.data.length > 0) {
+      console.log('第一条数据:', result.data[0]);
+    }
+
+    const filtered = result.data.filter((row: any) => row.url && row.url.trim());
+    console.log('过滤后（有URL）的数据行数:', filtered.length);
+
+    const mapped = filtered.map((row: any) => ({
+      url: row.url?.trim() || '',
+      channel: row.channel?.trim() || '',
+      username: row.username?.trim() || '',
+      email: row.email?.trim() || '',
+      valid_email: row.valid_email?.trim() || '',
+      post_per_month: row.post_per_month?.trim() || '',
+      similarity: row.similarity?.trim() || '',
+      last_updated: row.last_updated?.trim() || '',
+      country: row.country?.trim() || '',
+      subscribers: row.subscribers?.trim() || '',
+      posts: row.posts?.trim() || '',
+      views: row.views?.trim() || '',
+      er: row.er?.trim() || '',
+      vr: row.vr?.trim() || '',
+      links: row.links?.trim() || '',
+      topics: row.topics?.trim() || '',
+      audiences: row.audiences?.trim() || '',
+    }));
+
+    console.log('最终返回的leads数量:', mapped.length);
+    if (mapped.length > 0) {
+      console.log('第一条lead:', mapped[0]);
+    }
+
+    return mapped;
   };
 
   // 处理文件上传
@@ -152,12 +169,23 @@ function App() {
 
     try {
       const leads = parseCSVData(pasteText);
+      console.log('handlePasteSubmit - 解析后的leads数量:', leads.length);
+      
+      if (leads.length === 0) {
+        setMessage({ 
+          type: 'error', 
+          text: '❌ 无法解析数据！请确保：1) CSV包含表头 2) 至少有一行数据 3) URL列不为空' 
+        });
+        setIsProcessing(false);
+        return;
+      }
+      
       await processLeads(leads);
       setPasteText('');
       setPasteMode(false);
     } catch (error) {
       console.error('Error processing pasted data:', error);
-      setMessage({ type: 'error', text: '处理数据失败' });
+      setMessage({ type: 'error', text: `处理数据失败: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
       setIsProcessing(false);
     }
@@ -165,25 +193,53 @@ function App() {
 
   // 处理leads并去重，仅展示结果，不自动保存
   const processLeads = async (leads: Lead[]): Promise<ProcessResult> => {
+    console.log('processLeads 被调用，leads数量:', leads.length);
+    console.log('leads数据:', leads);
+    
     const urls = leads.map(l => l.url).filter(Boolean);
+    console.log('提取的URLs:', urls);
+    
     const existingUrls = await checkExistingUrls(urls);
+    console.log('已存在的URLs:', Array.from(existingUrls));
 
     const newLeadsList: Lead[] = [];
     const duplicatesList: Lead[] = [];
 
+    // 规范化URL用于比较
+    const normalizeUrl = (url: string) => {
+      if (!url) return '';
+      return url.trim().toLowerCase().replace(/\/+$/, '');
+    };
+
     leads.forEach(lead => {
-      if (lead.url && existingUrls.has(lead.url)) {
+      if (!lead.url || !lead.url.trim()) {
+        console.log('跳过无效lead（无URL）:', lead);
+        return;
+      }
+      
+      // 使用规范化后的URL进行比较
+      const normalizedUrl = normalizeUrl(lead.url);
+      if (existingUrls.has(normalizedUrl)) {
         duplicatesList.push(lead);
-      } else if (lead.url) {
+        console.log('发现重复:', lead.url, '(规范化:', normalizedUrl, ')');
+      } else {
         newLeadsList.push(lead);
+        console.log('发现新lead:', lead.url, '(规范化:', normalizedUrl, ')');
       }
     });
+
+    console.log('处理结果 - 新leads:', newLeadsList.length, '重复:', duplicatesList.length);
 
     setDuplicates(duplicatesList);
     setNewLeads(newLeadsList);
 
     // 显示去重结果，不自动保存
-    if (newLeadsList.length > 0) {
+    if (leads.length === 0) {
+      setMessage({
+        type: 'warning',
+        text: `⚠️ 没有有效数据，请检查CSV格式是否正确。确保CSV包含表头且至少有一行数据。`
+      });
+    } else if (newLeadsList.length > 0) {
       setMessage({
         type: 'success',
         text: `✅ 去重完成！发现 ${newLeadsList.length} 个新leads，${duplicatesList.length} 个重复。请查看"新Leads"标签页确认后保存。`
@@ -192,7 +248,7 @@ function App() {
     } else {
       setMessage({
         type: 'warning',
-        text: `⚠️ 没有新leads，全部 ${duplicatesList.length} 条记录已存在数据库中`
+        text: `⚠️ 没有新leads，全部 ${duplicatesList.length} 条记录已存在数据库中（共处理 ${leads.length} 条）`
       });
     }
 

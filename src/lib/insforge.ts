@@ -23,14 +23,34 @@ export async function getSentLeads(): Promise<Lead[]> {
   return data || [];
 }
 
+// 规范化URL（用于去重比较）
+function normalizeUrl(url: string): string {
+  if (!url) return '';
+  // 移除首尾空格，转为小写，移除尾随斜杠
+  return url.trim().toLowerCase().replace(/\/+$/, '');
+}
+
 // 检查URL是否已存在
 export async function checkExistingUrls(urls: string[]): Promise<Set<string>> {
   const existingUrls = new Set<string>();
   
-  // 分批查询，每批100个
+  if (urls.length === 0) {
+    return existingUrls;
+  }
+  
+  // 过滤有效URLs
+  const validUrls = urls.filter(url => url && url.trim());
+  if (validUrls.length === 0) {
+    return existingUrls;
+  }
+  
+  // 先尝试精确匹配（效率高）
   const batchSize = 100;
-  for (let i = 0; i < urls.length; i += batchSize) {
-    const batch = urls.slice(i, i + batchSize);
+  const foundExactMatches = new Set<string>();
+  
+  for (let i = 0; i < validUrls.length; i += batchSize) {
+    const batch = validUrls.slice(i, i + batchSize);
+    
     const { data, error } = await insforge.database
       .from('sent_leads')
       .select('url')
@@ -41,7 +61,42 @@ export async function checkExistingUrls(urls: string[]): Promise<Set<string>> {
       continue;
     }
     
-    data?.forEach(item => existingUrls.add(item.url));
+    // 记录精确匹配的URL（规范化后）
+    data?.forEach(item => {
+      if (item.url) {
+        foundExactMatches.add(normalizeUrl(item.url));
+      }
+    });
+  }
+  
+  // 如果精确匹配找到了一些，直接返回
+  if (foundExactMatches.size > 0) {
+    return foundExactMatches;
+  }
+  
+  // 如果精确匹配没找到任何结果，可能是URL格式不一致
+  // 获取所有数据库URL进行规范化比较（仅当精确匹配失败时）
+  console.log('精确匹配未找到，进行规范化比较（可能URL格式不一致）...');
+  const { data: allDbUrls, error: dbError } = await insforge.database
+    .from('sent_leads')
+    .select('url');
+  
+  if (!dbError && allDbUrls) {
+    // 创建规范化后的数据库URLs Set
+    const dbNormalizedUrls = new Set<string>();
+    allDbUrls.forEach(item => {
+      if (item.url) {
+        dbNormalizedUrls.add(normalizeUrl(item.url));
+      }
+    });
+    
+    // 检查输入的URLs（规范化后）是否在数据库中
+    validUrls.forEach(inputUrl => {
+      const normalized = normalizeUrl(inputUrl);
+      if (dbNormalizedUrls.has(normalized)) {
+        existingUrls.add(normalized);
+      }
+    });
   }
   
   return existingUrls;
