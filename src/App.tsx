@@ -17,7 +17,8 @@ import {
   Check,
   Search,
   X,
-  Filter
+  Filter,
+  Wand2
 } from 'lucide-react';
 import type { Lead, ProcessResult, Stats } from './types';
 import { 
@@ -25,7 +26,8 @@ import {
   checkExistingUrls, 
   saveNewLeads, 
   deleteLead,
-  getStats 
+  getStats,
+  cleanLeadsWithAI
 } from './lib/insforge';
 
 function App() {
@@ -35,12 +37,18 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stats, setStats] = useState<Stats>({ total: 0, uniqueEmails: 0 });
-  const [activeTab, setActiveTab] = useState<'upload' | 'new' | 'sent'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'new' | 'sent' | 'ai-clean'>('upload');
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info' | 'warning'; text: string } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // AI数据清洗相关状态
+  const [aiCleanPasteText, setAiCleanPasteText] = useState('');
+  const [aiCleanMode, setAiCleanMode] = useState(false);
+  const [aiCleanedLeads, setAiCleanedLeads] = useState<Lead[]>([]);
+  const [aiCleaning, setAiCleaning] = useState(false);
+  const [aiCleanStats, setAiCleanStats] = useState({ total: 0, kept: 0, removed: 0 });
 
   // 加载已发送的leads
   const loadSentLeads = useCallback(async () => {
@@ -358,6 +366,90 @@ function App() {
     }
   };
 
+  // AI数据清洗：处理粘贴的数据
+  const handleAiCleanSubmit = async () => {
+    if (!aiCleanPasteText.trim()) {
+      setMessage({ type: 'error', text: '请粘贴数据' });
+      return;
+    }
+
+    setAiCleaning(true);
+    setMessage({ type: 'info', text: '正在使用AI清洗数据...' });
+
+    try {
+      // 解析CSV数据
+      const leads = parseCSVData(aiCleanPasteText);
+      console.log('AI清洗 - 解析后的leads数量:', leads.length);
+      
+      if (leads.length === 0) {
+        setMessage({ 
+          type: 'error', 
+          text: '❌ 无法解析数据！请确保：1) CSV包含表头 2) 至少有一行数据 3) URL列不为空' 
+        });
+        setAiCleaning(false);
+        return;
+      }
+
+      // 使用AI清洗数据
+      setMessage({ type: 'info', text: `正在使用AI分析 ${leads.length} 条记录的AUDIENCES列...` });
+      const { kept, removed } = await cleanLeadsWithAI(leads);
+      
+      setAiCleanedLeads(kept);
+      setAiCleanStats({
+        total: leads.length,
+        kept: kept.length,
+        removed: removed.length
+      });
+      
+      setMessage({
+        type: 'success',
+        text: `✅ AI清洗完成！保留 ${kept.length} 条（technical/coding/developer相关），移除 ${removed.length} 条`
+      });
+      
+      setAiCleanPasteText('');
+      setAiCleanMode(false);
+    } catch (error) {
+      console.error('Error cleaning leads with AI:', error);
+      setMessage({ type: 'error', text: `AI清洗失败: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setAiCleaning(false);
+    }
+  };
+
+  // 导出AI清洗后的leads为CSV
+  const handleExportAiCleanedLeads = () => {
+    if (aiCleanedLeads.length === 0) {
+      setMessage({ type: 'error', text: '没有数据可导出' });
+      return;
+    }
+
+    const csv = Papa.unparse(aiCleanedLeads.map(lead => ({
+      URL: lead.url,
+      CHANNEL: lead.channel,
+      USERNAME: lead.username,
+      EMAIL: lead.email,
+      'VALID EMAIL': lead.valid_email,
+      'POST PER MONTH': lead.post_per_month,
+      SIMILARITY: lead.similarity,
+      COUNTRY: lead.country,
+      SUBSCRIBERS: lead.subscribers,
+      TOPICS: lead.topics,
+      AUDIENCES: lead.audiences,
+    })));
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `ai-cleaned-leads-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setMessage({ type: 'success', text: '导出成功' });
+  };
+
   // 导出新leads为CSV
   const handleExportNewLeads = () => {
     if (newLeads.length === 0) {
@@ -666,6 +758,27 @@ function App() {
           </button>
           <button
             onClick={() => {
+              console.log('AI Clean tab clicked');
+              setActiveTab('ai-clean');
+            }}
+            className={`px-5 py-2.5 rounded-xl font-medium text-sm transition-all cursor-pointer ${
+              activeTab === 'ai-clean'
+                ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/25'
+                : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Wand2 size={16} />
+              AI 数据清洗
+              {aiCleanedLeads.length > 0 && (
+                <span className="bg-purple-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {aiCleanedLeads.length}
+                </span>
+              )}
+            </div>
+          </button>
+          <button
+            onClick={() => {
               console.log('Sent tab clicked');
               setActiveTab('sent');
             }}
@@ -872,6 +985,118 @@ function App() {
                   <p className="text-sm mt-1">保存新leads后会显示在这里</p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* AI 数据清洗 Tab */}
+        {activeTab === 'ai-clean' && (
+          <div className="slide-up">
+            <div className="bg-gray-900/50 border border-gray-800 rounded-2xl overflow-hidden">
+              <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">
+                  AI 数据清洗（{aiCleanedLeads.length}）
+                </h2>
+                {aiCleanedLeads.length > 0 && (
+                  <button
+                    onClick={handleExportAiCleanedLeads}
+                    className="btn-secondary flex items-center gap-2 text-sm !py-2 !px-4 cursor-pointer"
+                  >
+                    <Download size={16} />
+                    导出CSV
+                  </button>
+                )}
+              </div>
+
+              {/* 清洗统计 */}
+              {aiCleanStats.total > 0 && (
+                <div className="p-4 bg-gray-800/50 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3">
+                      <p className="text-2xl font-bold text-blue-400">{aiCleanStats.total}</p>
+                      <p className="text-xs text-gray-400">总记录数</p>
+                    </div>
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                      <p className="text-2xl font-bold text-emerald-400">{aiCleanStats.kept}</p>
+                      <p className="text-xs text-gray-400">保留（技术相关）</p>
+                    </div>
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                      <p className="text-2xl font-bold text-red-400">{aiCleanStats.removed}</p>
+                      <p className="text-xs text-gray-400">移除（非技术相关）</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 粘贴区域 */}
+              {!aiCleanMode && aiCleanedLeads.length === 0 && (
+                <div className="p-12">
+                  <div className="bg-gray-800/50 border-2 border-dashed border-gray-700 rounded-2xl p-8 text-center">
+                    <Wand2 size={48} className="mx-auto mb-4 text-purple-400 opacity-50" />
+                    <h3 className="text-lg font-semibold text-white mb-2">AI 数据清洗</h3>
+                    <p className="text-gray-400 text-sm mb-6">
+                      使用AI分析AUDIENCES列，只保留technical、coding、developer相关的leads
+                    </p>
+                    <button
+                      onClick={() => setAiCleanMode(true)}
+                      className="btn-primary flex items-center gap-2 mx-auto cursor-pointer"
+                    >
+                      <FileSpreadsheet size={16} />
+                      开始粘贴数据
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 粘贴模式 */}
+              {aiCleanMode && (
+                <div className="p-6">
+                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+                    <textarea
+                      value={aiCleanPasteText}
+                      onChange={(e) => setAiCleanPasteText(e.target.value)}
+                      placeholder="粘贴CSV数据（包含表头）..."
+                      className="w-full h-40 input-field resize-none text-sm font-mono"
+                    />
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={handleAiCleanSubmit}
+                        disabled={aiCleaning}
+                        className="btn-primary flex-1 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {aiCleaning ? (
+                          <>
+                            <RefreshCw size={16} className="animate-spin" />
+                            AI分析中...
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 size={16} />
+                            AI清洗数据
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => { setAiCleanMode(false); setAiCleanPasteText(''); }}
+                        className="btn-secondary cursor-pointer"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 清洗结果 */}
+              {aiCleanedLeads.length > 0 ? (
+                renderLeadsTable(aiCleanedLeads, false, true)
+              ) : aiCleanStats.total > 0 ? (
+                <div className="p-12 text-center text-gray-500">
+                  <XCircle size={48} className="mx-auto mb-4 opacity-50" />
+                  <p>没有符合条件的数据</p>
+                  <p className="text-sm mt-1">所有记录的AUDIENCES都不包含technical/coding/developer相关内容</p>
+                </div>
+              ) : null}
             </div>
           </div>
         )}

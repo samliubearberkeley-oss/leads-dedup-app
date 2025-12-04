@@ -159,3 +159,79 @@ export async function getStats(): Promise<{ total: number; uniqueEmails: number 
   return { total: count || 0, uniqueEmails };
 }
 
+// 使用AI判断AUDIENCES是否包含technical/coding/developer相关
+export async function checkAudienceWithAI(audiences: string): Promise<boolean> {
+  if (!audiences || !audiences.trim()) {
+    return false;
+  }
+
+  try {
+    const prompt = `请判断以下AUDIENCES内容是否与technical、coding、developer相关。
+
+AUDIENCES: "${audiences}"
+
+请只回答 "YES" 或 "NO"，不要添加任何其他文字。
+
+判断标准：
+- 如果包含以下关键词或相关概念，回答 YES：technical, coding, developer, programmer, software engineer, tech professional, IT professional, computer science, software development, web development, programming, coder, software developer, tech enthusiast, developer community
+- 如果完全不相关（比如只是general audience, students without tech focus, general public等），回答 NO
+- 如果部分相关或模糊，倾向于回答 YES（只要有任何技术相关的内容）`;
+
+    const completion = await insforge.ai.chat.completions.create({
+      model: 'openai/gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a helpful assistant that analyzes audience descriptions. Only respond with "YES" or "NO".'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.1, // 低温度确保一致性
+      maxTokens: 10
+    });
+
+    const response = completion.choices[0]?.message?.content?.trim().toUpperCase() || '';
+    return response === 'YES';
+  } catch (error) {
+    console.error('AI判断失败:', error);
+    // 如果AI调用失败，使用简单的关键词匹配作为后备
+    const lowerAudiences = audiences.toLowerCase();
+    const keywords = ['technical', 'coding', 'developer', 'programmer', 'software engineer', 'tech', 'programming', 'coder', 'software developer', 'it professional', 'computer science', 'web development'];
+    return keywords.some(keyword => lowerAudiences.includes(keyword));
+  }
+}
+
+// 批量使用AI清洗leads（检查AUDIENCES列）
+export async function cleanLeadsWithAI(leads: Lead[]): Promise<{ kept: Lead[]; removed: Lead[] }> {
+  const kept: Lead[] = [];
+  const removed: Lead[] = [];
+
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i];
+    const audiences = lead.audiences || '';
+    
+    try {
+      const isRelevant = await checkAudienceWithAI(audiences);
+      if (isRelevant) {
+        kept.push(lead);
+      } else {
+        removed.push(lead);
+      }
+      
+      // 每处理10个显示一次进度
+      if ((i + 1) % 10 === 0) {
+        console.log(`AI清洗进度: ${i + 1}/${leads.length}`);
+      }
+    } catch (error) {
+      console.error(`处理lead ${i + 1} 时出错:`, error);
+      // 出错时默认保留（保守策略）
+      kept.push(lead);
+    }
+  }
+
+  return { kept, removed };
+}
+
