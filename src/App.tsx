@@ -163,7 +163,7 @@ function App() {
     }
   };
 
-  // 处理leads并去重，自动保存新leads到数据库
+  // 处理leads并去重，仅展示结果，不自动保存
   const processLeads = async (leads: Lead[]): Promise<ProcessResult> => {
     const urls = leads.map(l => l.url).filter(Boolean);
     const existingUrls = await checkExistingUrls(urls);
@@ -180,46 +180,20 @@ function App() {
     });
 
     setDuplicates(duplicatesList);
+    setNewLeads(newLeadsList);
 
-    // 自动保存新leads到数据库
+    // 显示去重结果，不自动保存
     if (newLeadsList.length > 0) {
-      setMessage({ type: 'info', text: `发现 ${newLeadsList.length} 个新leads，正在自动保存到数据库...` });
-      
-      try {
-        const result = await saveNewLeads(newLeadsList);
-        
-        if (result.failed === 0) {
-          setMessage({
-            type: 'success',
-            text: `✅ 保存成功！新增 ${result.success} 个leads，跳过 ${duplicatesList.length} 个重复`
-          });
-        } else {
-          setMessage({
-            type: 'warning',
-            text: `⚠️ 部分保存：成功 ${result.success}，失败 ${result.failed}，重复 ${duplicatesList.length}`
-          });
-        }
-        
-        // 刷新已发送列表
-        await loadSentLeads();
-        setNewLeads([]); // 清空新leads列表因为已经保存了
-        setActiveTab('sent');
-      } catch (error) {
-        console.error('Auto-save failed:', error);
-        // 保存失败时，保留newLeads让用户可以手动重试
-        setNewLeads(newLeadsList);
-        setMessage({
-          type: 'error',
-          text: `❌ 自动保存失败！发现 ${newLeadsList.length} 个新leads，请点击"保存到数据库"重试`
-        });
-        setActiveTab('new');
-      }
+      setMessage({
+        type: 'success',
+        text: `✅ 去重完成！发现 ${newLeadsList.length} 个新leads，${duplicatesList.length} 个重复。请查看"新Leads"标签页确认后保存。`
+      });
+      setActiveTab('new'); // 自动切换到新leads标签页
     } else {
       setMessage({
         type: 'warning',
-        text: `⚠️ 没有新leads需要保存，全部 ${duplicatesList.length} 条记录已存在数据库中`
+        text: `⚠️ 没有新leads，全部 ${duplicatesList.length} 条记录已存在数据库中`
       });
-      setNewLeads([]);
     }
 
     return {
