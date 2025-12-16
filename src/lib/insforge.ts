@@ -133,7 +133,7 @@ export async function saveNewLeads(leads: Lead[]): Promise<{ success: number; fa
     const batch = leadsToInsert.slice(i, i + batchSize);
     
     try {
-      const { error, data } = await insforge.database
+      const { error } = await insforge.database
         .from('sent_leads')
         .insert(batch)
         .select();
