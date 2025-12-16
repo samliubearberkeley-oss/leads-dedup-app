@@ -276,22 +276,39 @@ function App() {
     }
 
     setIsProcessing(true);
-    setMessage({ type: 'info', text: '正在保存到数据库...' });
+    setMessage({ type: 'info', text: `正在保存 ${newLeads.length} 条记录到数据库...` });
 
     try {
       const result = await saveNewLeads(newLeads);
-      setMessage({
-        type: result.failed === 0 ? 'success' : 'warning',
-        text: `保存完成！成功: ${result.success}，失败: ${result.failed}`
-      });
       
-      await loadSentLeads();
-      setNewLeads([]);
-      setDuplicates([]);
-      setActiveTab('sent');
+      if (result.failed === 0) {
+        setMessage({
+          type: 'success',
+          text: `✅ 保存成功！成功插入 ${result.success} 条记录`
+        });
+        await loadSentLeads();
+        setNewLeads([]);
+        setDuplicates([]);
+        setActiveTab('sent');
+      } else if (result.success === 0) {
+        setMessage({
+          type: 'error',
+          text: `❌ 保存失败！所有 ${result.failed} 条记录都无法插入。可能是重复记录或数据格式问题，请检查控制台日志。`
+        });
+      } else {
+        setMessage({
+          type: 'warning',
+          text: `⚠️ 部分保存成功！成功: ${result.success}，失败: ${result.failed}。失败原因可能是重复记录，请检查控制台日志。`
+        });
+        // 即使部分失败，也刷新数据
+        await loadSentLeads();
+      }
     } catch (error) {
       console.error('Error saving leads:', error);
-      setMessage({ type: 'error', text: '保存失败' });
+      setMessage({ 
+        type: 'error', 
+        text: `保存失败: ${error instanceof Error ? error.message : String(error)}。请查看控制台获取详细信息。`
+      });
     } finally {
       setIsProcessing(false);
     }

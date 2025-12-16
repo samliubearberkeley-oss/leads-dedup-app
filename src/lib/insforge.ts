@@ -69,14 +69,15 @@ export async function checkExistingUrls(urls: string[]): Promise<Set<string>> {
     });
   }
   
-  // 如果精确匹配找到了一些，直接返回
-  if (foundExactMatches.size > 0) {
-    return foundExactMatches;
+  // 将精确匹配的结果加入最终结果
+  foundExactMatches.forEach(url => existingUrls.add(url));
+  
+  // 如果精确匹配已经找到了所有URL，可以提前返回
+  if (foundExactMatches.size >= validUrls.length) {
+    return existingUrls;
   }
   
-  // 如果精确匹配没找到任何结果，可能是URL格式不一致
-  // 获取所有数据库URL进行规范化比较（仅当精确匹配失败时）
-  console.log('精确匹配未找到，进行规范化比较（可能URL格式不一致）...');
+  // 获取所有数据库URL进行规范化比较（确保不遗漏格式不同的重复项）
   const { data: allDbUrls, error: dbError } = await insforge.database
     .from('sent_leads')
     .select('url');
@@ -107,24 +108,77 @@ export async function saveNewLeads(leads: Lead[]): Promise<{ success: number; fa
   let success = 0;
   let failed = 0;
   
+  // 先再次检查URL，确保没有重复
+  const urlsToInsert = leads.map(l => normalizeUrl(l.url)).filter(Boolean);
+  const existingUrls = await checkExistingUrls(urlsToInsert);
+  
+  // 过滤掉已存在的leads
+  const leadsToInsert = leads.filter(lead => {
+    if (!lead.url || !lead.url.trim()) {
+      return false; // 跳过没有URL的记录
+    }
+    const normalizedUrl = normalizeUrl(lead.url);
+    return !existingUrls.has(normalizedUrl);
+  });
+  
+  console.log(`准备插入 ${leadsToInsert.length} 条记录（已过滤 ${leads.length - leadsToInsert.length} 条重复）`);
+  
+  if (leadsToInsert.length === 0) {
+    return { success: 0, failed: leads.length };
+  }
+  
   // 分批插入，每批50个
   const batchSize = 50;
-  for (let i = 0; i < leads.length; i += batchSize) {
-    const batch = leads.slice(i, i + batchSize);
-    const { error } = await insforge.database
-      .from('sent_leads')
-      .insert(batch)
-      .select();
+  for (let i = 0; i < leadsToInsert.length; i += batchSize) {
+    const batch = leadsToInsert.slice(i, i + batchSize);
     
-    if (error) {
-      console.error('Error inserting leads:', error);
+    try {
+      const { error, data } = await insforge.database
+        .from('sent_leads')
+        .insert(batch)
+        .select();
+      
+      if (error) {
+        console.error('批量插入错误:', error);
+        console.error('错误详情:', JSON.stringify(error, null, 2));
+        
+        // 如果批量插入失败，尝试逐个插入以找出问题记录
+        console.log(`批量插入失败，尝试逐个插入 ${batch.length} 条记录...`);
+        for (const lead of batch) {
+          try {
+            const { error: singleError } = await insforge.database
+              .from('sent_leads')
+              .insert(lead)
+              .select();
+            
+            if (singleError) {
+              console.error(`单条插入失败 (URL: ${lead.url}):`, singleError);
+              failed++;
+            } else {
+              success++;
+            }
+          } catch (err) {
+            console.error(`单条插入异常 (URL: ${lead.url}):`, err);
+            failed++;
+          }
+        }
+      } else {
+        success += batch.length;
+        console.log(`成功插入批次 ${Math.floor(i / batchSize) + 1}，${batch.length} 条记录`);
+      }
+    } catch (err) {
+      console.error('插入异常:', err);
       failed += batch.length;
-    } else {
-      success += batch.length;
     }
   }
   
-  return { success, failed };
+  // 计算被过滤掉的重复记录
+  const filteredDuplicates = leads.length - leadsToInsert.length;
+  if (filteredDuplicates > 0) {
+    console.log(`过滤掉 ${filteredDuplicates} 条重复记录`);
+  }
+  
+  return { success, failed: failed + filteredDuplicates };
 }
 
 // 删除lead
